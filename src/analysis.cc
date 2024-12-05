@@ -13,6 +13,9 @@
 #include "simulationUtils.h"
 #include "simulator.h"
 #include "printUtils.h"
+#include <ctime>
+#include <tuple>
+#include <cstdlib> // For std::system
 
 using Simulator::TensorMovementHint;
 using Simulator::TensorLocation;
@@ -159,10 +162,32 @@ void tensor_first_pass_liveness_analysis() {
     // TODO: complete liveness analysis
     if (!current_tensor->is_global_weight) {
       // This tensor is intermediate
+      current_tensor->live_interval = {kernel_num, -1}; // Set to max values initially
+
+      for (int j = 0; j < kernel_num; j++) {
+        CUDAKernel current_kernel = kernel_list[j];
+
+        // Check if the tensor is used in this kernel
+        std::vector<Tensor*> required_tensors;
+        current_kernel.getRequiredTensors(required_tensors);
+
+        for (Tensor *tensor : required_tensors) {
+          if (tensor == current_tensor) {
+            // Update live_interval
+            current_tensor->live_interval.first = std::min(current_tensor->live_interval.first, j);
+            current_tensor->live_interval.second = std::max(current_tensor->live_interval.second, j+1);
+          }
+        }
+      }
+
+      if (current_tensor->live_interval.first == kernel_num) {
+        current_tensor->live_interval = {-1, -1};
+      }
 
     }
     // global tensors do not need this info
   }
+
 }
 
 void Tensor::print_liveness() {
@@ -190,9 +215,32 @@ void tensor_second_pass_interval_formation() {
     if (!current_tensor->is_global_weight) {
       // This tensor is intermediate
 
+      // Clear any existing inactive periods
+      current_tensor->inactive_periods.clear();
+
+      int start = current_tensor->live_interval.first;
+      int end = current_tensor->live_interval.second;
+
+      // Add inactive period before the active range
+      if (start > 0) {
+        InactivePeriod *inactive_before = new InactivePeriod(current_tensor);
+        inactive_before->kernelLevel_interval = {0, start};
+        current_tensor->inactive_periods.push_back(inactive_before);
+      }
+
+      // Add inactive period after the active range
+      if (end < kernel_num) {
+        InactivePeriod *inactive_after = new InactivePeriod(current_tensor);
+        inactive_after->kernelLevel_interval = {end, kernel_num};
+        current_tensor->inactive_periods.push_back(inactive_after);
+      }
+
     } else {
       // This tensor is global
-
+      InactivePeriod *no_inactive = new InactivePeriod(current_tensor);
+      no_inactive->kernelLevel_interval = {1, -1};
+      no_inactive->is_looped = true;
+      current_tensor->inactive_periods.push_back(no_inactive);
     }
   }
 }
@@ -284,3 +332,214 @@ void scheduling_movement_hints() {
   // make sure the movement hints are sorted, the simulator depends on this
   std::sort(movement_hints.begin(), movement_hints.end());
 }
+
+
+
+
+//////////////////////////////////// CHAPTER 3 /////////////////////////////////////////////////
+void print_liveness_and_inactive_periods(){
+  const int tensor_num = tensor_list.size();
+
+  for (int i = 0; i < tensor_num; i++) {
+    Tensor *current_tensor = tensor_list[i];
+    // Print live_interval for the current tensor
+    current_tensor->print_liveness();
+    current_tensor->print_inactive_periods();
+  }
+}
+
+
+
+
+void calculate_minimum_memory_demand() {
+  const int kernel_num = kernel_list.size();
+  std::vector<long long> memory_usage(kernel_num, 0);
+
+  for (int i = 0; i < tensor_list.size(); i++) {
+    Tensor *tensor = tensor_list[i];
+    if (tensor->live_interval.first == -1) {
+        continue; // Skip unused tensors
+    }
+
+    // Add the tensor's memory to all kernels in its active interval
+    for (int k = tensor->live_interval.first; k < tensor->live_interval.second; k++) {
+        memory_usage[k] += tensor->size_in_byte;
+    }
+  }
+
+  // Find the maximum memory usage and the corresponding kernel
+  auto max_it = std::max_element(memory_usage.begin(), memory_usage.end());
+  long long max_memory = *max_it;
+  int max_kernel = std::distance(memory_usage.begin(), max_it); // Get the index of the max value
+
+  std::cout << "Minimum Memory Demand: " << max_memory / (1024.0 * 1024.0) << " MB" << std::endl;
+  std::cout << "Kernel with Maximum Memory Usage: " << max_kernel << std::endl;
+  std::cout << "_______________________________________________________________" << std::endl;
+}
+
+
+void plot_tensor_size_vs_lifetime() {
+  // size_byte(long long) vs livetime(int)
+  std::vector<std::pair<long long, int>> data;
+
+  for (int i = 0; i < tensor_list.size(); i++) {
+      Tensor *tensor = tensor_list[i];
+      if (tensor->live_interval.first == -1) {
+          continue; // Skip unused tensors
+      }
+
+      int lifetime = tensor->live_interval.second - tensor->live_interval.first;
+      data.push_back({tensor->size_in_byte, lifetime});
+  }
+
+  // Print data for plotting
+  std::cout << "Plot Tensor Size vs Lifetime: " << std::endl;
+  for (const auto &entry : data) {
+      std::cout << "Size(MB): " << entry.first / (1024.0 * 1024.0) << ", Lifetime: " << entry.second << std::endl;
+  }
+  
+  
+  
+  // Export data to a file or integrate with Python for plotting
+  // Output data to a CSV file
+  // Generate unique file name using timestamp
+  std::time_t now = std::time(nullptr);
+  std::tm *ltm = std::localtime(&now);
+  std::string file_name = "tensor_size_vs_lifetime_" +
+                        std::to_string(ltm->tm_hour) + "_" +
+                        std::to_string(ltm->tm_min) + "_" +
+                        std::to_string(ltm->tm_sec) + ".csv";
+
+  // Output data to a unique CSV file
+  std::ofstream file(file_name);
+  if (!file.is_open()) {
+      std::cerr << "Failed to open file for writing." << std::endl;
+      return;
+  }
+
+  // Write header
+  file << "Size_MB,Lifetime\n";
+
+  // Write data
+  for (const auto &entry : data) {
+      file << entry.first / (1024.0 * 1024.0) << "," << entry.second << "\n";
+  }
+
+  file.close();
+
+  std::cout << "Data exported to " << file_name << " for plotting." << std::endl;
+
+  // new
+  // Call the Python script to generate the plot
+  std::string command = "python3 plot_tensor_vs_lifetime.py " + file_name;
+  int result = std::system(command.c_str());
+
+  if (result != 0) {
+      std::cerr << "Failed to run the Python script. Please check the Python file." << std::endl;
+  }
+
+  std::cout << "_______________________________________________________________" << std::endl;
+}
+
+
+void plot_active_inactive_distribution() {
+  // tensor id(int) vs active time(int) vs inactive time(int)
+  std::vector<std::tuple<int,int,int>> data;
+
+  for (int i = 0; i < tensor_list.size(); i++) {
+    Tensor *tensor = tensor_list[i];
+    if (tensor->live_interval.first == -1) {
+        continue; // Skip unused tensors
+    }
+
+    int tensor_id_ = tensor->tensor_id;
+    int active_time = tensor->live_interval.second - tensor->live_interval.first;
+    int inactive_time = 0;
+    for (const auto &period : tensor->inactive_periods) {
+        inactive_time += period->kernelLevel_interval.second - period->kernelLevel_interval.first;
+    }
+
+    data.push_back(std::make_tuple(tensor_id_, active_time, inactive_time));
+
+    std::cout << "Tensor " << tensor_id_ << ": Active Time: " << active_time
+              << ", Inactive Time: " << inactive_time << std::endl;
+  }
+  
+
+  // Export data to a file or integrate with Python for plotting
+  // Output data to a CSV file
+  // Generate unique file name using timestamp
+  std::time_t now = std::time(nullptr);
+  std::tm *ltm = std::localtime(&now);
+  std::string file_name = "active_time_vs_inactive_time" +
+                        std::to_string(ltm->tm_hour) + "_" +
+                        std::to_string(ltm->tm_min) + "_" +
+                        std::to_string(ltm->tm_sec) + ".csv";
+
+  // Output data to a unique CSV file
+  std::ofstream file(file_name);
+  if (!file.is_open()) {
+      std::cerr << "Failed to open file for writing." << std::endl;
+      return;
+  }
+
+  // Write header
+  file << "Tensor_id,ActiveTime,InactiveTime\n";
+
+  // Write data
+  for (const auto &entry : data) {
+    file << std::get<0>(entry) << ","          // First element
+         << std::get<1>(entry) << ","          // Second element
+         << std::get<2>(entry) << "\n";        // Third element
+  }
+
+  file.close();
+
+  std::cout << "Data exported to " << file_name << " for plotting." << std::endl;
+
+  // new
+  // Call the Python script to generate plots
+  std::string command = "python3 plot_active_vs_inactive.py " + file_name;
+  int result = std::system(command.c_str());
+
+  if (result != 0) {
+      std::cerr << "Failed to run the Python script. Please check the Python file." << std::endl;
+  }
+
+  std::cout << "_______________________________________________________________" << std::endl;
+}
+
+
+void calculate_memory_with_swapping() {
+  const int kernel_num = kernel_list.size();
+  const int tensor_num = tensor_list.size();
+  std::vector<long long> memory_usage(kernel_num, 0);
+
+  for (int k = 0; k < kernel_num; k++) {
+    std::vector<Tensor*> required_tensors;
+    CUDAKernel current_kernel = kernel_list[k];
+
+    // Get tensors required for this kernel
+    current_kernel.getRequiredTensors(required_tensors);
+
+    for (int i = 0; i < tensor_num; i++) {
+        Tensor *current_tensor = tensor_list[i];
+
+        // Check if the tensor is within its live interval
+        if (current_tensor->live_interval.first <= k && current_tensor->live_interval.second > k) {
+            // Check if the tensor is required in this kernel
+            if (std::find(required_tensors.begin(), required_tensors.end(), current_tensor) != required_tensors.end()) {
+                // Tensor is actively used
+                memory_usage[k] += current_tensor->size_in_byte;
+            }
+        }
+    }
+  }
+
+  // Find the peak memory usage with swapping
+  long long max_memory = *std::max_element(memory_usage.begin(), memory_usage.end());
+  std::cout << "Memory Demand with Swapping: " << max_memory / (1024.0 * 1024.0) << " MB" << std::endl;
+  std::cout << "_______________________________________________________________" << std::endl;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////

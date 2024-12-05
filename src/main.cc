@@ -494,6 +494,11 @@ int main(int argc, char *argv[]) {
         tensor_first_pass_liveness_analysis();
         tensor_second_pass_interval_formation();
         get_inactive_periods_time();
+        print_liveness_and_inactive_periods();
+        calculate_minimum_memory_demand();
+        plot_tensor_size_vs_lifetime();
+        plot_active_inactive_distribution();
+        calculate_memory_with_swapping();
 
         // life cycle info
         r = new RedirStdOut("interval.config");
@@ -531,9 +536,9 @@ int main(int argc, char *argv[]) {
                 }
             }
             iprintf("\nPerforming Simulation\n", "");
-            Simulator::EventSimulator *sim = new Simulator::EventSimulator(stat_output_file);
-            sim->run(num_iteration);
-            delete sim; // make sure stats are written back to the files
+            // Simulator::EventSimulator *sim = new Simulator::EventSimulator(stat_output_file);
+            // sim->run(num_iteration);
+            // delete sim; // make sure stats are written back to the files
         }
         iprintf("\nPerforming Analysis\n", "");
         stat.prepareOutputFiles(true);

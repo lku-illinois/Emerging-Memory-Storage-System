@@ -60,8 +60,8 @@ class Tensor {
         std::string name() const;
         bool is_alive(int current_kernel) const;
         void print() const;
-        void print_liveness();
-        void print_inactive_periods();
+        void print_liveness();      //print live_interval
+        void print_inactive_periods();      //print Inactive Periods
 
         int tensor_id;
         long long size_in_byte;  //Aligned with 4KB
@@ -80,6 +80,7 @@ class Tensor {
         std::pair<int, int> live_interval = { -1, -1 };
         std::vector<InactivePeriod*> inactive_periods;  //TODO: Important:  A vector of inactive periods of this tensor. With the start of inactive_period sorted in ascending order
 
+        // std::vector<int> not_used;  // not_used is when tensor is active, but not used 
 };
 
 class InactivePeriod {
@@ -181,7 +182,12 @@ void scheduling_movement_hints();
 void print_GPU_mem_really_in_use();
 
 
-
+// chapter 3
+void print_liveness_and_inactive_periods();
+void calculate_minimum_memory_demand();
+void plot_tensor_size_vs_lifetime();
+void plot_active_inactive_distribution();
+void calculate_memory_with_swapping();
 
 
 
