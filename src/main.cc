@@ -536,9 +536,9 @@ int main(int argc, char *argv[]) {
                 }
             }
             iprintf("\nPerforming Simulation\n", "");
-            // Simulator::EventSimulator *sim = new Simulator::EventSimulator(stat_output_file);
-            // sim->run(num_iteration);
-            // delete sim; // make sure stats are written back to the files
+            Simulator::EventSimulator *sim = new Simulator::EventSimulator(stat_output_file);
+            sim->run(num_iteration);
+            delete sim; // make sure stats are written back to the files
         }
         iprintf("\nPerforming Analysis\n", "");
         stat.prepareOutputFiles(true);
